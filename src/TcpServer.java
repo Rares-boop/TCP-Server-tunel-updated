@@ -17,10 +17,46 @@ public class TcpServer {
     public static final ConcurrentHashMap<Integer, List<NetworkPacket>> offlineBuffer = new ConcurrentHashMap<>();
 
     public static final Gson gson = new Gson();
+    public static volatile KeyPair globalServerKyberKeys;
 
     public static void main(String[] args){
-        System.out.println("SERVER PORNIT");
-        new Thread(TcpServer::tcpServer).start();
+        try {
+            globalServerKyberKeys = CryptoHelper.generateKyberKeys();
+            System.out.println("SERVER PORNIT");
+
+            startKeyRotation();
+            new Thread(TcpServer::tcpServer).start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void startKeyRotation() {
+        new Thread(() -> {
+            while (true) {
+                try {
+
+                    Thread.sleep(30 * 60 * 1000);
+
+                    System.out.println("🔄 [ROTATION] Generare chei Kyber noi...");
+                    long start = System.currentTimeMillis();
+
+                    // Aici generam cheia noua. Dureaza putin, dar nu blocheaza clientii conectati!
+                    KeyPair newKeys = CryptoHelper.generateKyberKeys();
+
+                    // O schimbam atomic
+                    globalServerKyberKeys = newKeys;
+
+                    System.out.println("✅ [ROTATION] Chei schimbate in " + (System.currentTimeMillis() - start) + "ms. Urmatoarea rotire in 30 min.");
+
+                    // Asteptam 30 minute (1800000 ms) sau cat vrei tu
+                    Thread.sleep(30 * 60 * 1000);
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
     }
 
     public static void tcpServer(){
@@ -56,6 +92,8 @@ public class TcpServer {
             try{
 //                this.out = new ObjectOutputStream(socket.getOutputStream());
 //                this.in = new ObjectInputStream(socket.getInputStream());
+
+                socket.setTcpNoDelay(true);
 
                 this.out = new PrintWriter(socket.getOutputStream(), true);
                 this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -292,7 +330,10 @@ public class TcpServer {
         private boolean performHandshake() {
             try {
                 System.out.println("Handshake...");
-                KeyPair kyberPair = CryptoHelper.generateKyberKeys();
+
+//                KeyPair kyberPair = CryptoHelper.generateKyberKeys();
+                KeyPair kyberPair = TcpServer.globalServerKyberKeys;
+
                 this.tempKyberPrivate = kyberPair.getPrivate();
                 byte[] pubBytes = kyberPair.getPublic().getEncoded();
                 String pubBase64 = Base64.getEncoder().encodeToString(pubBytes);
