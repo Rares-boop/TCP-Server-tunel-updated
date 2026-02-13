@@ -6,6 +6,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.security.KeyPair;
 import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -333,12 +334,17 @@ public class TcpServer {
 
 //                KeyPair kyberPair = CryptoHelper.generateKyberKeys();
                 KeyPair kyberPair = TcpServer.globalServerKyberKeys;
+                KeyPair ecPair = CryptoHelper.generateECKeys();
 
                 this.tempKyberPrivate = kyberPair.getPrivate();
                 byte[] pubBytes = kyberPair.getPublic().getEncoded();
-                String pubBase64 = Base64.getEncoder().encodeToString(pubBytes);
 
-                NetworkPacket hello = new NetworkPacket(PacketType.KYBER_SERVER_HELLO, 0, pubBase64);
+                String pubBase64 = Base64.getEncoder().encodeToString(pubBytes);
+                String ecPubBase64 = Base64.getEncoder().encodeToString(ecPair.getPublic().getEncoded());
+
+                String combinedPayload = pubBase64 + ":" + ecPubBase64;
+
+                NetworkPacket hello = new NetworkPacket(PacketType.KYBER_SERVER_HELLO, 0, combinedPayload);
 //                synchronized (out) { out.writeObject(hello.toJson()); out.flush(); }
                 synchronized (out){
                     out.println(hello.toJson());
@@ -350,9 +356,18 @@ public class TcpServer {
                 NetworkPacket response = NetworkPacket.fromJson(responseJson);
 
                 if (response.getType() == PacketType.KYBER_CLIENT_FINISH) {
-                    String wrappedKeyBase64 = response.getPayload().getAsString();
-                    byte[] wrappedBytes = Base64.getDecoder().decode(wrappedKeyBase64);
-                    this.sessionKey = CryptoHelper.decapsulate(this.tempKyberPrivate, wrappedBytes);
+                    String payload = response.getPayload().getAsString();
+                    String[] parts = payload.split(":");
+
+                    byte[] kyberCipherBytes = Base64.getDecoder().decode(parts[0]);
+                    byte[] clientECPubBytes = Base64.getDecoder().decode(parts[1]);
+
+                    SecretKey kyberSecret = CryptoHelper.decapsulate(this.tempKyberPrivate, kyberCipherBytes);
+
+                    PublicKey clientECPub = CryptoHelper.decodeECPublicKey(clientECPubBytes);
+                    byte[] ecSecret = CryptoHelper.doECDH(ecPair.getPrivate(), clientECPub);
+
+                    this.sessionKey = CryptoHelper.combineSecrets(ecSecret, kyberSecret.getEncoded());
                     this.tempKyberPrivate = null;
                     System.out.println("Tunel OK!");
                     return true;
